@@ -261,6 +261,17 @@ func (co *Conn) ReadMsg() (*Msg, error) {
 	if t := m.IsTsig(); t != nil {
 		// Need to work on the original message p, as that was used to calculate the tsig.
 		err = TsigVerifyWithProvider(p, co.tsigProvider(), co.tsigRequestMAC, false)
+		// A TCP session chains the previous message's MAC into the next one
+		// (RFC 8945 section 5.3). That previous message is this response.
+		// UDP exchanges are independent, so the request MAC stays in place
+		// only for the duration of this read.
+		if !isPacketConn(co.Conn) {
+			if err == nil {
+				co.tsigRequestMAC = t.MAC
+			} else {
+				co.tsigRequestMAC = ""
+			}
+		}
 	}
 	return m, err
 }
@@ -337,7 +348,8 @@ func (co *Conn) Read(p []byte) (n int, err error) {
 func (co *Conn) WriteMsg(m *Msg) (err error) {
 	var out []byte
 	if t := m.IsTsig(); t != nil {
-		// Set tsigRequestMAC for the next read, although only used in zone transfers.
+		// Save this request's MAC so ReadMsg can verify the response. On TCP,
+		// a successful ReadMsg then replaces it with the response MAC.
 		out, co.tsigRequestMAC, err = TsigGenerateWithProvider(m, co.tsigProvider(), co.tsigRequestMAC, false)
 	} else {
 		out, err = m.Pack()

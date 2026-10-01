@@ -716,3 +716,52 @@ func TestExchangeWithConn(t *testing.T) {
 		t.Errorf("failed to get an valid answer\n%v", r)
 	}
 }
+
+// Two TSIG messages on one TCP connection must include the previous response
+// MAC. BIND requires this; a connection that only remembers the request MAC
+// fails every message after the first.
+func TestConnTCPTSIGChainsResponseMAC(t *testing.T) {
+	secret := map[string]string{"test.": "so6ZGir4GPAqINNh9U5c3A=="}
+	s, addr, _, err := RunLocalTCPServer("127.0.0.1:0", func(srv *Server) {
+		srv.TsigSecret = secret
+		srv.Handler = HandlerFunc(func(w ResponseWriter, r *Msg) {
+			m := new(Msg)
+			m.SetReply(r)
+			if st := w.TsigStatus(); st != nil {
+				t.Errorf("TSIG: %v", st)
+				return
+			}
+			m.SetTsig("test.", HmacSHA256, 300, time.Now().Unix())
+			if err := w.WriteMsg(m); err != nil {
+				t.Errorf("write: %v", err)
+			}
+		})
+	})
+	if err != nil {
+		t.Fatalf("server: %v", err)
+	}
+	defer s.Shutdown()
+
+	co, err := Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer co.Close()
+	co.TsigSecret = secret
+
+	for i := 0; i < 3; i++ {
+		m := new(Msg)
+		m.SetQuestion("example.com.", TypeA)
+		m.SetTsig("test.", HmacSHA256, 300, time.Now().Unix())
+		if err := co.WriteMsg(m); err != nil {
+			t.Fatalf("write %d: %v", i, err)
+		}
+		resp, err := co.ReadMsg()
+		if err != nil {
+			t.Fatalf("read %d: %v", i, err)
+		}
+		if resp.Rcode != RcodeSuccess {
+			t.Fatalf("message %d rcode %s", i, RcodeToString[resp.Rcode])
+		}
+	}
+}
