@@ -717,10 +717,10 @@ func TestExchangeWithConn(t *testing.T) {
 	}
 }
 
-// Two TSIG messages on one TCP connection must include the previous response
-// MAC. BIND requires this; a connection that only remembers the request MAC
-// fails every message after the first.
-func TestConnTCPTSIGChainsResponseMAC(t *testing.T) {
+// Sequential requests on one TCP connection are independent TSIG transactions.
+// Each is signed with an empty prior MAC. Chaining the previous response MAC
+// makes BIND answer BADSIG. Multi-message answers chain inside Transfer.
+func TestConnTCPTSIGRequestsAreIndependent(t *testing.T) {
 	secret := map[string]string{"test.": "so6ZGir4GPAqINNh9U5c3A=="}
 	s, addr, _, err := RunLocalTCPServer("127.0.0.1:0", func(srv *Server) {
 		srv.TsigSecret = secret

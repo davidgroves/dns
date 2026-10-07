@@ -260,18 +260,11 @@ func (co *Conn) ReadMsg() (*Msg, error) {
 	}
 	if t := m.IsTsig(); t != nil {
 		// Need to work on the original message p, as that was used to calculate the tsig.
+		// co.tsigRequestMAC is this request's MAC (set by WriteMsg). A response is
+		// signed over that MAC. Do not replace it with the response MAC: the next
+		// request on this connection is a new transaction. Multi-message answers
+		// chain on Transfer (RFC 8945 section 5.3.1).
 		err = TsigVerifyWithProvider(p, co.tsigProvider(), co.tsigRequestMAC, false)
-		// A TCP session chains the previous message's MAC into the next one
-		// (RFC 8945 section 5.3). That previous message is this response.
-		// UDP exchanges are independent, so the request MAC stays in place
-		// only for the duration of this read.
-		if !isPacketConn(co.Conn) {
-			if err == nil {
-				co.tsigRequestMAC = t.MAC
-			} else {
-				co.tsigRequestMAC = ""
-			}
-		}
 	}
 	return m, err
 }
@@ -348,9 +341,11 @@ func (co *Conn) Read(p []byte) (n int, err error) {
 func (co *Conn) WriteMsg(m *Msg) (err error) {
 	var out []byte
 	if t := m.IsTsig(); t != nil {
-		// Save this request's MAC so ReadMsg can verify the response. On TCP,
-		// a successful ReadMsg then replaces it with the response MAC.
-		out, co.tsigRequestMAC, err = TsigGenerateWithProvider(m, co.tsigProvider(), co.tsigRequestMAC, false)
+		// Each request is its own TSIG transaction, on UDP and on a kept-open
+		// TCP connection. Sign with an empty prior MAC. Keep this request's MAC
+		// so ReadMsg can verify the response. Transfer chains the prior MAC
+		// across a multi-message answer; Conn does not.
+		out, co.tsigRequestMAC, err = TsigGenerateWithProvider(m, co.tsigProvider(), "", false)
 	} else {
 		out, err = m.Pack()
 	}

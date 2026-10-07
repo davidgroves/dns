@@ -668,21 +668,12 @@ func (srv *Server) serveDNS(m []byte, w *response) {
 	w.tsigStatus = nil
 	if w.tsigProvider != nil {
 		if t := req.IsTsig(); t != nil {
-			// UDP has no cross-message MAC. On TCP the prior MAC is the
-			// previous message on this connection (RFC 8945 section 5.3),
-			// which WriteMsg left in tsigRequestMAC.
-			priorMAC := ""
-			if w.tcp != nil {
-				priorMAC = w.tsigRequestMAC
-			}
-			w.tsigStatus = TsigVerifyWithProvider(m, w.tsigProvider, priorMAC, false)
+			// Each request is a new TSIG transaction, so the prior MAC is empty.
+			// Save this request's MAC for the response. A multi-message answer
+			// then chains from there with timers only (RFC 8945 section 5.3.1).
+			w.tsigStatus = TsigVerifyWithProvider(m, w.tsigProvider, "", false)
 			w.tsigTimersOnly = false
-			if w.tsigStatus != nil && w.tcp != nil {
-				// Verification failed; the peer will treat the session as reset.
-				w.tsigRequestMAC = ""
-			} else {
-				w.tsigRequestMAC = t.MAC
-			}
+			w.tsigRequestMAC = t.MAC
 		}
 	}
 
